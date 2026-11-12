@@ -1,0 +1,185 @@
+PAYROLLGUARD AI - DATABASE SCHEMA
+============================================================
+
+TABLE: allowances
+------------------------------------------------------------
+  allowance_id: VARCHAR(100) | NOT NULL | PRIMARY KEY
+  employee_id: VARCHAR(20) | NOT NULL | 
+  pay_period_id: VARCHAR(20) | NOT NULL | 
+  allowance_type: VARCHAR(50) | NOT NULL | 
+  amount: DECIMAL(12, 2) | NOT NULL | 
+  effective_start: DATE | NOT NULL | 
+  effective_end: DATE | NULL allowed | 
+  status: VARCHAR(20) | NOT NULL | 
+  source_reference: VARCHAR(100) | NULL allowed | 
+  FOREIGN KEYS:
+    employee_id -> employees(employee_id)
+    pay_period_id -> pay_periods(pay_period_id)
+
+TABLE: approvals
+------------------------------------------------------------
+  approval_id: VARCHAR(100) | NOT NULL | PRIMARY KEY
+  payroll_input_id: VARCHAR(100) | NOT NULL | 
+  approver_role: VARCHAR(30) | NOT NULL | 
+  approver_employee_id: VARCHAR(20) | NULL allowed | 
+  decision: VARCHAR(20) | NOT NULL | 
+  comments: TEXT | NULL allowed | 
+  created_at: DATETIME | NULL allowed | 
+  decided_at: DATETIME | NULL allowed | 
+  FOREIGN KEYS:
+    payroll_input_id -> payroll_inputs(payroll_input_id)
+    approver_employee_id -> employees(employee_id)
+
+TABLE: deductions
+------------------------------------------------------------
+  deduction_id: VARCHAR(100) | NOT NULL | PRIMARY KEY
+  employee_id: VARCHAR(20) | NOT NULL | 
+  pay_period_id: VARCHAR(20) | NOT NULL | 
+  deduction_type: VARCHAR(50) | NOT NULL | 
+  amount: DECIMAL(12, 2) | NOT NULL | 
+  effective_start: DATE | NOT NULL | 
+  effective_end: DATE | NULL allowed | 
+  status: VARCHAR(20) | NOT NULL | 
+  source_reference: VARCHAR(100) | NULL allowed | 
+  FOREIGN KEYS:
+    employee_id -> employees(employee_id)
+    pay_period_id -> pay_periods(pay_period_id)
+
+TABLE: employee_pay_groups
+------------------------------------------------------------
+  assignment_id: INTEGER | NOT NULL | PRIMARY KEY
+  employee_id: VARCHAR(20) | NOT NULL | 
+  pay_group_id: VARCHAR(20) | NOT NULL | 
+  effective_start: DATE | NOT NULL | 
+  effective_end: DATE | NULL allowed | 
+  FOREIGN KEYS:
+    employee_id -> employees(employee_id)
+    pay_group_id -> pay_groups(pay_group_id)
+
+TABLE: employees
+------------------------------------------------------------
+  employee_id: VARCHAR(20) | NOT NULL | PRIMARY KEY
+  first_name: VARCHAR(100) | NOT NULL | 
+  last_name: VARCHAR(100) | NOT NULL | 
+  email: VARCHAR(150) | NOT NULL | 
+  hire_date: DATE | NOT NULL | 
+  employment_status: VARCHAR(20) | NOT NULL | 
+  annual_salary: DECIMAL(12, 2) | NOT NULL | 
+  bank_account_ref: VARCHAR(100) | NULL allowed | 
+  tax_id_ref: VARCHAR(100) | NULL allowed | 
+  created_at: DATETIME | NULL allowed | 
+
+TABLE: event_history
+------------------------------------------------------------
+  event_id: INTEGER | NOT NULL | PRIMARY KEY
+  entity_type: VARCHAR(50) | NOT NULL | 
+  entity_id: VARCHAR(100) | NOT NULL | 
+  action: VARCHAR(50) | NOT NULL | 
+  actor_role: VARCHAR(30) | NOT NULL | 
+  actor_id: VARCHAR(100) | NULL allowed | 
+  old_value: TEXT | NULL allowed | 
+  new_value: TEXT | NULL allowed | 
+  created_at: DATETIME | NULL allowed | 
+
+TABLE: exceptions
+------------------------------------------------------------
+  exception_id: VARCHAR(100) | NOT NULL | PRIMARY KEY
+  payroll_input_id: VARCHAR(100) | NULL allowed | 
+  employee_id: VARCHAR(20) | NOT NULL | 
+  pay_period_id: VARCHAR(20) | NOT NULL | 
+  rule_id: VARCHAR(30) | NULL allowed | 
+  severity: VARCHAR(20) | NOT NULL | 
+  status: VARCHAR(20) | NOT NULL | 
+  description: TEXT | NOT NULL | 
+  source_record_id: VARCHAR(100) | NULL allowed | 
+  created_at: DATETIME | NULL allowed | 
+  resolved_at: DATETIME | NULL allowed | 
+  FOREIGN KEYS:
+    payroll_input_id -> payroll_inputs(payroll_input_id)
+    employee_id -> employees(employee_id)
+    pay_period_id -> pay_periods(pay_period_id)
+    rule_id -> validation_rules(rule_id)
+
+TABLE: leave_records
+------------------------------------------------------------
+  leave_id: VARCHAR(100) | NOT NULL | PRIMARY KEY
+  employee_id: VARCHAR(20) | NOT NULL | 
+  start_date: DATE | NOT NULL | 
+  end_date: DATE | NOT NULL | 
+  leave_type: VARCHAR(30) | NOT NULL | 
+  leave_days: DECIMAL(5, 2) | NOT NULL | 
+  status: VARCHAR(20) | NOT NULL | 
+  FOREIGN KEYS:
+    employee_id -> employees(employee_id)
+
+TABLE: pay_groups
+------------------------------------------------------------
+  pay_group_id: VARCHAR(20) | NOT NULL | PRIMARY KEY
+  group_name: VARCHAR(100) | NOT NULL | 
+  pay_frequency: VARCHAR(20) | NOT NULL | 
+  currency: VARCHAR(3) | NOT NULL | 
+  is_active: TINYINT | NOT NULL | 
+
+TABLE: pay_periods
+------------------------------------------------------------
+  pay_period_id: VARCHAR(20) | NOT NULL | PRIMARY KEY
+  pay_group_id: VARCHAR(20) | NOT NULL | 
+  start_date: DATE | NOT NULL | 
+  end_date: DATE | NOT NULL | 
+  pay_date: DATE | NOT NULL | 
+  status: VARCHAR(20) | NOT NULL | 
+  FOREIGN KEYS:
+    pay_group_id -> pay_groups(pay_group_id)
+
+TABLE: payroll_exports
+------------------------------------------------------------
+  export_id: VARCHAR(100) | NOT NULL | PRIMARY KEY
+  pay_period_id: VARCHAR(20) | NOT NULL | 
+  export_format: VARCHAR(10) | NOT NULL | 
+  status: VARCHAR(20) | NOT NULL | 
+  file_name: VARCHAR(255) | NULL allowed | 
+  record_count: INTEGER | NULL allowed | 
+  checksum: VARCHAR(128) | NULL allowed | 
+  exported_by: VARCHAR(100) | NULL allowed | 
+  created_at: DATETIME | NULL allowed | 
+  FOREIGN KEYS:
+    pay_period_id -> pay_periods(pay_period_id)
+
+TABLE: payroll_inputs
+------------------------------------------------------------
+  payroll_input_id: VARCHAR(100) | NOT NULL | PRIMARY KEY
+  employee_id: VARCHAR(20) | NOT NULL | 
+  pay_period_id: VARCHAR(20) | NOT NULL | 
+  base_pay: DECIMAL(12, 2) | NOT NULL | 
+  overtime_pay: DECIMAL(12, 2) | NOT NULL | 
+  allowances_total: DECIMAL(12, 2) | NOT NULL | 
+  deductions_total: DECIMAL(12, 2) | NOT NULL | 
+  gross_pay: DECIMAL(12, 2) | NOT NULL | 
+  net_pay: DECIMAL(12, 2) | NOT NULL | 
+  status: VARCHAR(30) | NOT NULL | 
+  calculated_at: DATETIME | NULL allowed | 
+  FOREIGN KEYS:
+    employee_id -> employees(employee_id)
+    pay_period_id -> pay_periods(pay_period_id)
+
+TABLE: time_entries
+------------------------------------------------------------
+  entry_id: VARCHAR(100) | NOT NULL | PRIMARY KEY
+  employee_id: VARCHAR(20) | NOT NULL | 
+  pay_period_id: VARCHAR(20) | NOT NULL | 
+  work_date: DATE | NOT NULL | 
+  hours: DECIMAL(5, 2) | NOT NULL | 
+  status: VARCHAR(20) | NOT NULL | 
+  source_submission_id: VARCHAR(100) | NULL allowed | 
+  FOREIGN KEYS:
+    employee_id -> employees(employee_id)
+    pay_period_id -> pay_periods(pay_period_id)
+
+TABLE: validation_rules
+------------------------------------------------------------
+  rule_id: VARCHAR(30) | NOT NULL | PRIMARY KEY
+  rule_code: VARCHAR(50) | NOT NULL | 
+  rule_name: VARCHAR(150) | NOT NULL | 
+  description: TEXT | NOT NULL | 
+  severity: VARCHAR(20) | NOT NULL | 
+  is_active: TINYINT | NOT NULL | 
