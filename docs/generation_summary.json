@@ -1,0 +1,14 @@
+{
+    "seed": 20261022,
+    "employees": 3000,
+    "pay_groups": 1,
+    "pay_periods": 3,
+    "employee_pay_groups": 3000,
+    "time_entries": 70000,
+    "allowances": 15000,
+    "deductions": 15000,
+    "combined_transactions": 100000,
+    "leave_records": 4500,
+    "ground_truth_cases": 8,
+    "status": "SUCCESS"
+}
