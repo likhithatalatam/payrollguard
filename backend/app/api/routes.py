@@ -1,12 +1,18 @@
-
 from io import StringIO
+from datetime import datetime
 import csv
 import hashlib
 import uuid
+import json
 from decimal import Decimal
 
-from app.models import PayrollExport
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Body,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -18,9 +24,11 @@ from app.models import (
     PayrollInput,
     ExceptionRecord,
     ValidationRule,
+    TimeEntry,
+    EventHistory,
+    PayrollExport,
 )
 from app.services.payroll_engine import run_payroll_for_period
-
 
 router = APIRouter()
 
@@ -185,6 +193,7 @@ def reconciliation(
     records = (
         db.query(PayrollInput)
         .filter(PayrollInput.pay_period_id == pay_period_id)
+        .order_by(PayrollInput.employee_id)
         .all()
     )
 
@@ -194,15 +203,35 @@ def reconciliation(
             detail="No payroll records found for this period. Run payroll first.",
         )
 
-    gross_total = sum((p.gross_pay for p in records), 0)
-    deductions_total = sum((p.deductions_total for p in records), 0)
-    net_total = sum((p.net_pay for p in records), 0)
+    gross_total = sum(
+        (Decimal(str(p.gross_pay or 0)) for p in records),
+        Decimal("0.00"),
+    )
 
-    errors = [
-        p.employee_id
-        for p in records
-        if round(float(p.gross_pay - p.deductions_total - p.net_pay), 2) != 0
-    ]
+    deductions_total = sum(
+        (Decimal(str(p.deductions_total or 0)) for p in records),
+        Decimal("0.00"),
+    )
+
+    net_total = sum(
+        (Decimal(str(p.net_pay or 0)) for p in records),
+        Decimal("0.00"),
+    )
+
+    errors = []
+
+    for p in records:
+        expected_net = (
+            Decimal(str(p.gross_pay or 0))
+            - Decimal(str(p.deductions_total or 0))
+        ).quantize(Decimal("0.01"))
+
+        actual_net = Decimal(str(p.net_pay or 0)).quantize(
+            Decimal("0.01")
+        )
+
+        if expected_net != actual_net:
+            errors.append(p.employee_id)
 
     return {
         "pay_period_id": pay_period_id,
@@ -274,13 +303,30 @@ def export_payroll(
         Decimal("0.01")
     )
 
-    if expected_net != net_total:
+    # Verify reconciliation for every employee.
+    employee_errors = []
+
+    for p in records:
+        expected_employee_net = (
+            Decimal(str(p.gross_pay or 0))
+            - Decimal(str(p.deductions_total or 0))
+        ).quantize(Decimal("0.01"))
+
+        actual_employee_net = Decimal(
+            str(p.net_pay or 0)
+        ).quantize(Decimal("0.01"))
+
+        if expected_employee_net != actual_employee_net:
+            employee_errors.append(p.employee_id)
+
+    if expected_net != net_total or employee_errors:
         raise HTTPException(
             status_code=409,
             detail={
                 "message": "Payroll reconciliation failed. Export rejected.",
                 "expected_net": str(expected_net),
                 "actual_net": str(net_total),
+                "employees_with_errors": employee_errors,
             },
         )
 
@@ -346,4 +392,208 @@ def export_payroll(
             "X-Export-Checksum": checksum,
         },
     )
+@router.get("/time-entries/pending/{pay_period_id}")
+def get_pending_time_entries(
+    pay_period_id: str,
+    db: Session = Depends(get_db)
+):
+    entries = (
+        db.query(TimeEntry)
+        .filter(
+            TimeEntry.pay_period_id == pay_period_id,
+            TimeEntry.status == "PENDING"
+        )
+        .order_by(TimeEntry.work_date.asc())
+        .limit(100)
+        .all()
+    )
 
+    return [
+        {
+            "entry_id": entry.entry_id,
+            "employee_id": entry.employee_id,
+            "pay_period_id": entry.pay_period_id,
+            "work_date": entry.work_date.isoformat(),
+            "hours": float(entry.hours),
+            "status": entry.status
+        }
+        for entry in entries
+    ]
+@router.post("/time-entries/{entry_id}/decision")
+def decide_time_entry(
+    entry_id: str,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Approve or reject a time entry.
+    Recalculates payroll and records the action in the audit trail.
+    """
+
+    entry = (
+        db.query(TimeEntry)
+        .filter(TimeEntry.entry_id == entry_id)
+        .first()
+    )
+
+    if not entry:
+        raise HTTPException(
+            status_code=404,
+            detail="Time entry not found.",
+        )
+
+    if entry.status != "PENDING":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot decide this entry because its current status is {entry.status}.",
+        )
+
+    decision = str(payload.get("decision", "")).upper()
+
+    if decision not in ["APPROVED", "REJECTED"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Decision must be APPROVED or REJECTED.",
+        )
+
+    actor_role = str(payload.get("actor_role", "MANAGER")).upper()
+    actor_id = str(payload.get("actor_id", "MANAGER-USER"))
+
+    old_status = entry.status
+
+    entry.status = decision
+
+    db.add(EventHistory(
+        entity_type="TIME_ENTRY",
+        entity_id=entry.entry_id,
+        action=f"TIME_ENTRY_{decision}",
+        actor_role=actor_role,
+        actor_id=actor_id,
+        old_value=old_status,
+        new_value=decision,
+    ))
+
+    try:
+        # The payroll engine commits the decision, audit event,
+        # payroll updates, and exception changes together.
+        result = run_payroll_for_period(
+            db,
+            entry.pay_period_id,
+        )
+
+        return {
+            "message": f"Time entry {decision.lower()} successfully.",
+            "entry_id": entry.entry_id,
+            "old_status": old_status,
+            "new_status": decision,
+            "payroll_recalculation": result,
+        }
+
+    except Exception as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Time-entry decision failed: {str(error)}",
+        )
+
+@router.post("/exceptions/{exception_id}/resolve")
+def resolve_exception(
+    exception_id: str,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Manually resolve an exception after the underlying issue is corrected.
+    """
+
+    exception = (
+        db.query(ExceptionRecord)
+        .filter(ExceptionRecord.exception_id == exception_id)
+        .first()
+    )
+
+    if not exception:
+        raise HTTPException(
+            status_code=404,
+            detail="Exception not found.",
+        )
+
+    if exception.status == "RESOLVED":
+        raise HTTPException(
+            status_code=409,
+            detail="This exception is already resolved.",
+        )
+
+    resolution_note = str(
+        payload.get("resolution_note", "")
+    ).strip()
+
+    if not resolution_note:
+        raise HTTPException(
+            status_code=400,
+            detail="Please provide a resolution_note.",
+        )
+
+    actor_role = str(payload.get("actor_role", "HR")).upper()
+    actor_id = str(payload.get("actor_id", "HR-USER"))
+
+    old_status = exception.status
+
+    exception.status = "RESOLVED"
+    exception.resolved_at = datetime.utcnow()
+
+    db.add(EventHistory(
+        entity_type="EXCEPTION",
+        entity_id=exception.exception_id,
+        action="EXCEPTION_MANUALLY_RESOLVED",
+        actor_role=actor_role,
+        actor_id=actor_id,
+        old_value=old_status,
+        new_value=json.dumps({
+            "status": "RESOLVED",
+            "resolution_note": resolution_note,
+        }),
+    ))
+
+    db.commit()
+
+    return {
+        "message": "Exception resolved successfully.",
+        "exception_id": exception.exception_id,
+        "old_status": old_status,
+        "new_status": exception.status,
+        "resolution_note": resolution_note,
+    }
+@router.get("/audit/{entity_type}/{entity_id}")
+def get_audit_history(
+    entity_type: str,
+    entity_id: str,
+    db: Session = Depends(get_db),
+):
+    events = (
+        db.query(EventHistory)
+        .filter(
+            EventHistory.entity_type == entity_type.upper(),
+            EventHistory.entity_id == entity_id,
+        )
+        .order_by(EventHistory.created_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "event_id": event.event_id,
+            "entity_type": event.entity_type,
+            "entity_id": event.entity_id,
+            "action": event.action,
+            "actor_role": event.actor_role,
+            "actor_id": event.actor_id,
+            "old_value": event.old_value,
+            "new_value": event.new_value,
+            "created_at": (
+                event.created_at.isoformat()
+                if event.created_at else None
+            ),
+        }
+        for event in events
+    ]

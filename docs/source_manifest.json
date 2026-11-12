@@ -23,7 +23,7 @@
         },
         "time_entries.csv": {
             "row_count": 70000,
-            "sha256": "cd80929de7c2df9463388ec93537098095ac4fb24e8f0b9e507a2606b5c0af8a"
+            "sha256": "8b67bd18c5ec5a7ef0d1ae69b360182f1fea009ae7d6b49f146c6179df18cdcf"
         },
         "leave_records.csv": {
             "row_count": 4500,
@@ -31,11 +31,11 @@
         },
         "allowances.csv": {
             "row_count": 15000,
-            "sha256": "6cb3d3e9a1dd76052b0e670b14819f76944e6f65e1437c525682b2b91f007dee"
+            "sha256": "512773c08ff5615cd11ec1eefe4f61e09728170416a41b020dec5712d29092ce"
         },
         "deductions.csv": {
             "row_count": 15000,
-            "sha256": "f9f1879be991af728d1d59e2b10fadbf283869304293672d15d03b5af5fedc9d"
+            "sha256": "bdb1768977ac0ec127d67474e84ba7673b3c2f37cfc1c40b2aebd3fdb139d981"
         }
     }
 }

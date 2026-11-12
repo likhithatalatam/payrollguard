@@ -310,10 +310,9 @@ def generate_time_entries():
             7.5, 8.0, 8.0, 8.0, 8.5
         ]))
 
-        status = rng.choices(
-            ["APPROVED", "PENDING", "REJECTED"],
-            weights=[96, 3, 1],
-        )[0]
+        # Normal synthetic time entries are approved.
+        # The dedicated GT-005 record below represents unapproved time.
+        status = "APPROVED"
 
         records.append({
             "entry_id": f"TIME-{employee_id}-{work_date.isoformat()}",

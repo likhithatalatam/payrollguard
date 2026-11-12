@@ -3,6 +3,7 @@ from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 from hashlib import sha1
 import json
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -159,13 +160,15 @@ def run_payroll_for_period(db: Session, pay_period_id: str):
         if item.employee_id in employee_ids:
             deduction_by_employee[item.employee_id].append(item)
 
-    # Rebuild exceptions for this period on every run.
-    # Existing payroll inputs are updated rather than duplicated.
-    db.query(ExceptionRecord).filter(
-        ExceptionRecord.pay_period_id == pay_period_id
-    ).delete(synchronize_session=False)
+    # Preserve existing exception records and their history.
+    existing_exceptions = {
+        item.exception_id: item
+        for item in db.query(ExceptionRecord)
+        .filter(ExceptionRecord.pay_period_id == pay_period_id)
+        .all()
+    }
 
-    db.flush()
+    current_exception_ids = set()
 
     exception_count = 0
     blocked_count = 0
@@ -357,23 +360,23 @@ def run_payroll_for_period(db: Session, pay_period_id: str):
             base_pay + overtime_pay + allowances_total
         )
 
-        net_pay = money(gross_pay - deductions_total)
+        raw_net_pay = money(gross_pay - deductions_total)
 
-        # A negative net amount is a reconciliation exception.
-        if net_pay < ZERO:
+        if raw_net_pay < ZERO:
             add_exception(
                 "PAYROLL_RECONCILIATION",
                 "Total deductions exceed gross pay. "
                 "Payroll calculation requires review.",
             )
             net_pay = ZERO
+        else:
+            net_pay = raw_net_pay
 
-        # Reconciliation check.
-        if money(gross_pay - deductions_total) != net_pay:
-            add_exception(
-                "PAYROLL_RECONCILIATION",
-                "Gross pay minus deductions does not match net pay.",
-            )
+            if money(gross_pay - deductions_total) != net_pay:
+                add_exception(
+                    "PAYROLL_RECONCILIATION",
+                    "Gross pay minus deductions does not match net pay.",
+                )
 
         # 6. Determine payroll status.
         has_high = any(
@@ -425,25 +428,75 @@ def run_payroll_for_period(db: Session, pay_period_id: str):
 
         db.flush()
 
-        # 8. Save exceptions linked to the payroll input.
+        # 8. Save or update exceptions without deleting history.
         for item in employee_exceptions:
-            db.add(ExceptionRecord(
-                exception_id=item["exception_id"],
-                payroll_input_id=payroll_input.payroll_input_id,
-                employee_id=employee_id,
-                pay_period_id=pay_period_id,
-                rule_id=item["rule_id"],
-                severity=item["severity"],
-                status="OPEN",
-                description=item["description"],
-                source_record_id=item["source_record_id"],
-            ))
-            exception_count += 1
+            exception_id = item["exception_id"]
+            current_exception_ids.add(exception_id)
+
+            existing = existing_exceptions.get(exception_id)
+
+            if existing:
+                old_status = existing.status
+
+                existing.payroll_input_id = payroll_input.payroll_input_id
+                existing.rule_id = item["rule_id"]
+                existing.severity = item["severity"]
+                existing.description = item["description"]
+                existing.source_record_id = item["source_record_id"]
+
+                if old_status == "RESOLVED":
+                    existing.status = "OPEN"
+                    existing.resolved_at = None
+
+                    db.add(EventHistory(
+                        entity_type="EXCEPTION",
+                        entity_id=exception_id,
+                        action="EXCEPTION_REOPENED",
+                        actor_role="SYSTEM",
+                        actor_id="PAYROLL_ENGINE",
+                        old_value="RESOLVED",
+                        new_value="OPEN",
+                    ))
+
+                exception_count += 1
+
+            else:
+                db.add(ExceptionRecord(
+                    exception_id=exception_id,
+                    payroll_input_id=payroll_input.payroll_input_id,
+                    employee_id=employee_id,
+                    pay_period_id=pay_period_id,
+                    rule_id=item["rule_id"],
+                    severity=item["severity"],
+                    status="OPEN",
+                    description=item["description"],
+                    source_record_id=item["source_record_id"],
+                ))
+                exception_count += 1
 
         total_gross += gross_pay
         total_net += net_pay
 
     # 9. Audit event.
+    # 9. Automatically resolve open exceptions that are no longer detected.
+    for exception_id, existing in existing_exceptions.items():
+
+        if (
+            exception_id not in current_exception_ids
+            and existing.status == "OPEN"
+        ):
+            existing.status = "RESOLVED"
+            existing.resolved_at = datetime.utcnow()
+
+            db.add(EventHistory(
+                entity_type="EXCEPTION",
+                entity_id=exception_id,
+                action="EXCEPTION_AUTO_RESOLVED",
+                actor_role="SYSTEM",
+                actor_id="PAYROLL_ENGINE",
+                old_value="OPEN",
+                new_value="RESOLVED",
+            ))
     db.add(EventHistory(
         entity_type="PAY_PERIOD",
         entity_id=pay_period_id,

@@ -18,3 +18,21 @@ data/ground_truth/
 
 # Editors
 .vscode/
+
+# Local backups and code snapshots
+payrollguard_backup_before_reset.sql
+payrollguard_code_snapshot.txt
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+dist/
