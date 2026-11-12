@@ -1,0 +1,20 @@
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# Testing
+.pytest_cache/
+
+# Frontend
+node_modules/
+dist/
+
+# Generated files
+data/generated/
+data/ground_truth/
+
+# Editors
+.vscode/
