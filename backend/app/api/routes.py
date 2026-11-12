@@ -1,7 +1,11 @@
 
 from io import StringIO
 import csv
+import hashlib
+import uuid
+from decimal import Decimal
 
+from app.models import PayrollExport
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -212,6 +216,7 @@ def reconciliation(
     }
 
 
+
 @router.get("/payroll/export/{pay_period_id}")
 def export_payroll(
     pay_period_id: str,
@@ -230,6 +235,56 @@ def export_payroll(
             detail="No payroll records found. Run payroll first.",
         )
 
+    # 1. Prevent unsafe payroll exports
+    blocked_count = sum(
+        1 for p in records if p.status == "BLOCKED"
+    )
+    review_count = sum(
+        1 for p in records if p.status == "REVIEW"
+    )
+
+    if blocked_count > 0 or review_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Payroll export blocked. Resolve validation issues first.",
+                "blocked_records": blocked_count,
+                "review_records": review_count,
+                "total_records": len(records),
+            },
+        )
+
+    # 2. Verify payroll reconciliation
+    gross_total = sum(
+        (Decimal(str(p.gross_pay or 0)) for p in records),
+        Decimal("0.00"),
+    )
+
+    deductions_total = sum(
+        (Decimal(str(p.deductions_total or 0)) for p in records),
+        Decimal("0.00"),
+    )
+
+    net_total = sum(
+        (Decimal(str(p.net_pay or 0)) for p in records),
+        Decimal("0.00"),
+    )
+
+    expected_net = (gross_total - deductions_total).quantize(
+        Decimal("0.01")
+    )
+
+    if expected_net != net_total:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Payroll reconciliation failed. Export rejected.",
+                "expected_net": str(expected_net),
+                "actual_net": str(net_total),
+            },
+        )
+
+    # 3. Generate CSV
     output = StringIO()
     writer = csv.writer(output)
 
@@ -258,14 +313,37 @@ def export_payroll(
             p.status,
         ])
 
-    output.seek(0)
+    csv_content = output.getvalue()
+
+    # 4. Generate checksum
+    checksum = hashlib.sha256(
+        csv_content.encode("utf-8")
+    ).hexdigest()
 
     filename = f"payroll_{pay_period_id}.csv"
 
+    # 5. Record successful export in audit table
+    export_record = PayrollExport(
+        export_id=f"EXP-{uuid.uuid4().hex[:12].upper()}",
+        pay_period_id=pay_period_id,
+        export_format="CSV",
+        status="COMPLETED",
+        file_name=filename,
+        record_count=len(records),
+        checksum=checksum,
+        exported_by="SYSTEM/API",
+    )
+
+    db.add(export_record)
+    db.commit()
+
+    # 6. Return CSV
     return StreamingResponse(
-        iter([output.getvalue()]),
+        iter([csv_content]),
         media_type="text/csv",
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"'
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Export-Checksum": checksum,
         },
     )
+
